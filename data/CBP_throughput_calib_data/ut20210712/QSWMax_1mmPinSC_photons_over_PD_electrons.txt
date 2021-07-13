@@ -1,0 +1,2 @@
+Wavelength(nm), SC photons / PD electrons
+400.0, 17.63370495363131
