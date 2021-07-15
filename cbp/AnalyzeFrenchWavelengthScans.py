@@ -443,16 +443,14 @@ if __name__=="__main__":
     ##### HERE IS THE STUFF THAT YOU MIGHT WANT TO MODIFY FOR EACH RUN #####
 
     wavelengths = np.arange(350, 1050, 5)
-    wavelengths = np.arange(1000, 1050, 5)
-    wavelengths = np.arange(400, 450, 5)
     data_root = '../data/CBP_throughput_calib_data/'
     #To add additional layers of file suffixes, append additional layers of list in the flattenListOfLists function below.
     #   Even if your suffix categories are only one element long, they must be in a list.
     QSWs = ['Max']
     pinholes = ['_5mmPin3']
-    other_suffixes = ['_LinTest']
-    data_dir = data_root + 'ut20210713/LinearityScans/QSWMax/'
-    save_str = 'QSWMax_5mmPin'
+    other_suffixes = ['_AmbLight']
+    data_dir = data_root + 'ut20210713/CBPOffTarget/'
+    save_str = 'QSWMax_5mmPin_OffTarget'
 
     #### [END STUFF YOU FREQUENTLY WANT TO MODIFY] #####
 

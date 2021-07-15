@@ -56,7 +56,7 @@ def showCurrentsAndCurrentRatios(data_files, figsize = [12, 8], ylabels = [r'Pho
     plt.show()
 
 
-def showCBPTransmissionCurve(data_files, figsize = [12, 8], ylabels = ['SC photons / PD photons', 'Median-normalized SC photons / PD photons'], xlabel = 'Wavelength (nm)', colors = ['r', 'k'], legend_strs = [],
+def showCBPTransmissionCurve(data_files, figsize = [12, 8], ylabels = ['SC photons / PD photons', 'Median-normalized SC photons / PD photons'], xlabel = 'Wavelength (nm)', colors = ['r', 'g', 'k'], legend_strs = [],
                                  save_data_dir = '', save_file_name = None):
     """
     Authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
@@ -68,9 +68,9 @@ def showCBPTransmissionCurve(data_files, figsize = [12, 8], ylabels = ['SC photo
     In this example, we make these plots for a 1mmPinhole and a 5mmPinhole illuminating the CBP, with both cases normalized to have median value 1.
 
     import FrenchDataSetupExtraScripts as fdata
-    dir_root = '../data/CBP_throughput_calib_data/ut20210712/'
-    legend_strs = [['Laser @ Max, 1mm hole', 'Laser @ Max, 5mm hole'], ['Laser @ Max, 1mm hole', 'Laser @ Max, 5mm hole']]
-    fdata.showCBPTransmissionCurve([dir_root + '1mmPin_sequenceB/' + 'QSWMax_1mmPinSC_photons_over_PD_photons.txt', dir_root + '5mmPin_sequenceB/' + 'QSWMax_5mmPinSC_photons_over_PD_photons.txt'], legend_strs = legend_strs, save_data_dir = dir_root, save_file_name = 'CBP_transmissivity_1mm_vs_5mm_holes.pdf')
+    dir_root = '../data/CBP_throughput_calib_data/'
+    legend_strs = [['Laser @ Max, 1mm hole', 'Laser @ Max, 5mm hole', 'CBP Off Target'], ['Laser @ Max, 1mm hole', 'Laser @ Max, 5mm hole', 'CBP Off Target']]
+    fdata.showCBPTransmissionCurve([dir_root + 'ut20210712/1mmPin_sequenceB/' + 'QSWMax_1mmPinSC_photons_over_PD_photons.txt', dir_root + 'ut20210712/5mmPin_sequenceB/' + 'QSWMax_5mmPinSC_photons_over_PD_photons.txt', dir_root + 'ut20210713/CBPOffTarget/' + 'QSWMax_5mmPin_OffTargetSC_photons_over_PD_photons.txt'], legend_strs = legend_strs, save_data_dir = dir_root, save_file_name = 'CBP_transmissivity_1mm_vs_5mm_vs_CBPOffTarget.pdf')
     """
     f, axarr = plt.subplots(2, 1, sharex = True, figsize = figsize)
     data_by_wavelengths = []
