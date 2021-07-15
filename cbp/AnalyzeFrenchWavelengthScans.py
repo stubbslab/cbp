@@ -5,186 +5,46 @@ import sys
 import scipy
 import AstronomicalParameterArchive as apa
 
-def fit_line_pieces(x, y, err=None, delta_chi2=10):
-    """Fit pieces of lines on piecewise linear data, starting from the left with a minimum of 2 points.
-    The delta_chi2 argument set the level to break the fitting loop and start a new line.
+"""
+authors: Sasha Brownsberger (SB, sashab@alumni.stanford.edu)
 
-    Parameters
-    ----------
-    x: array_like
-        The abscissa data.
-    y: array_like
-        The ordinate data.
-    err: array_like, optional
-        The uncertainties on data (default: None).
-    delta_chi2: float, optional
-        The threshold value from which a new line is fitted to next data points (default: 10).
+Modifications:
+2021/07/04 - 2021/07/14: SB: First written and quickly developed.
+2021/07/14: SB: Added documentation, removed unneeded functions, removed debugging/extraneous code.
 
-    Returns
-    -------
-    pvals: array_like
-        List of linear coefficient for each piece of line.
-    indices: array_like
-        List of the indices for each piece of line.
 
+Description:
+This function takes in a scan of the CBP throughput and extracts measurements of the solar cell and photodiode
+    photocharges.  Each monochromatic data point in the scan should consist of three files: solar cell current
+    readout, photodiode current readout, and start and end times of the bursts.
+"""
+
+def groupBurstStartGuesses(ungrouped_guess_indeces, min_sep = 20, verbose = 0):
     """
-    pvals = []
-    indices_all = []
-    startpoint = 0
-    endpoint = 0
-    counter = 0
-    while endpoint < len(x) - 1 and counter <= len(x):
-        chi2 = 0
-        # start a line with at least three points
-        for index in range(startpoint + 2, len(x)):
-            indices_tmp = np.arange(startpoint, index, dtype=int)
-            pval_tmp = np.polyfit(x[indices_tmp], y[indices_tmp], deg=1)
-            # compute the chi square
-            if err is None:
-                stand_in_err = np.std(y[startpoint:index])
-                print ('[startpoint, index] = ' + str([startpoint, index]))
-                print ('stand_in_err = ' + str(stand_in_err))
-                chi2_tmp = np.sum(((y[indices_tmp] - np.polyval(pval_tmp, x[indices_tmp])) / stand_in_err) ** 2)
-            else:
-                chi2_tmp = np.sum(((y[indices_tmp] - np.polyval(pval_tmp, x[indices_tmp])) / err[indices_tmp]) ** 2)
-            print ('[chi2, chi2_tmp, len(indices_tmp), (chi2_tmp - chi2) / len(indices_tmp), delta_chi2] = ' + str([chi2, chi2_tmp, len(indices_tmp), (chi2_tmp - chi2) / len(indices_tmp), delta_chi2] ))
-            # initialisation
-            if chi2 == 0:
-                chi2 = chi2_tmp
-            # check the new chi square
-            if abs(chi2_tmp - chi2) / len(indices_tmp) < delta_chi2 and index < len(x) - 1:
-                # continue
-                chi2 = chi2_tmp
-                pval = pval_tmp
-                indices = indices_tmp
-            else:
-                # break the fit
-                if index == len(x) - 1:
-                    # last point: keep the current fit
-                    indices_all.append(indices_tmp)
-                    pvals.append(pval_tmp)
-                else:
-                    # save previous fit
-                    pvals.append(pval)
-                    indices_all.append(indices)
-                endpoint = indices_all[-1][-1]
-                startpoint = endpoint + 1
-                break
-        counter += 1
-    return pvals, indices_all
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
 
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
 
-def get_total_charge_and_leakage_currents(time, charge, delta_chi2=10, err=None, plot=False):
-    r"""Estimate the total charge accumulated in the charge sequence and
-    the leakage currents at beginning and end of the sequence.
+    Description:
+    Takes an array of indeces of an array (integers) and sorts them into "groups" of nearby indeces.  For an
+        index to be placed in a group, it must be within min_sep distance from any other component of that group.
 
-    Fit pieces of lines on charge data, starting from the left with a minimum of 2 points.
-    The delta_chi2 argument set the level to break the fitting loop and start a new line.
-
-    This measures the leakage current at the beginning of the sequence $i_K^{(1)}$ and at the end $i_K^{(2)}$.
-    The beginning of the charge $t_1$ is considered to be the last point of the first step while the end of the
-    charge $t_2$ is defined as the first point of the last step. The accumulated charge $\Delta q_{\rm mes}$ is then
-        $$\Delta q_{\rm mes} = q(t_2) - q(t_1)$$
-    But because of the leakage current, charges are lost all along the process at a constant rate defined by the
-    leakage current. As both leakage currents $i_K^{(1)}$ and $i_K^{(2)}$ varies with the accumulated charge but
-    are nearly the same, we define the Keithley capacitor charge as:
-        $$\Delta q = \Delta q_{\rm mes}- \frac{1}{2} \left( i_K^{(1)}+i_K^{(2)}\right) (t_2-t_1)$$
-    If this correction is not done, we differences between the runs on $\Delta q_{\rm mes}$ because leakage
-    currents are not the same along the data acquisition.
-    With the correction, the charge measurement is reproducible.
-
-    The error budget is the following:
-        - $\Delta q_{\rm mes}$ can be underestimated if the true $t_1$ is a time step $\delta t$ after $t_1$ and
-        the true $t_2$ is $\delta t$ before
-    $$q(t_2 - \delta t) - q(t_1 + \delta t) \approx \Delta q_{\rm mes} - i_K^{(2)} \delta t - i_K^{(1)} \delta t$$
-    $$ \sigma_{\Delta q_{\rm mes}} = - \delta t \left(i_K^{(2)} + i_K^{(1)} \right) $$
-        - a first uncertainty on the charge correction comes from the estimate of $t_2$ and $t_1$:
-    $$ \frac{1}{2} \left(i_K^{(1)}+i_K^{(2)}\right) (t_2-\delta t -t_1 - \delta t ) = \frac{1}{2} \left(i_K^{(1)}
-       +i_K^{(2)}\right) (t_2-t_1) - \delta t \left(i_K^{(2)} + i_K^{(1)} \right)$$
-    $$ \sigma_{\delta q^{(t)}} = - \delta t \left(i_K^{(2)} + i_K^{(1)} \right) $$
-        - a first uncertainty on the charge correction comes from the estimate of the leakage currents:
-    $$ \sigma_{\delta q^{(i_K)}} = \frac{1}{2} \left \vert i_K^{(1)}-i_K^{(2)}\right\vert (t_2-t_1) $$
-    The final uncertainty is estimated as:
-    $$\sigma_{\Delta q} =  \left\vert\sigma_{\Delta q_{\rm mes}}\right\vert + \left\vert\sigma_{\delta q^{(t)}}
-       \right\vert +  \left\vert\sigma_{\delta q^{(i_K)}} \right\vert$$
-
-    Parameters
-    ----------
-    time: array_like
-        Array of timestamps in seconds.
-    charge: array_like
-        Array of charges in Coulomb.
-    err: array_like, optional
-        Array of charge uncertainties in Coulomb (default: None).
-    delta_chi2: float, optional
-        The threshold value from which a new line is fitted to next data points (default: 10).
-    plot: bool, optional
-        If True, plot the results (default: False).
-
-    Returns
-    -------
-    total_charge: float
-        The total charge in Keithley units.
-    total_charge_err: float
-        Uncertainty on the total charge in Keithley units.
-    i_k1: float
-        Leakage current at the beginning of the sequence in Keithley units.
-    i_k2: float
-        Leakage current at the end of the sequence in Keithley units.
-
+    This function is used to separate distinct peaks above some detection threshold.
     """
-    # fit lines at beginning and end of the charge sequence
-    pvals, indices = fit_line_pieces(time, charge, delta_chi2=delta_chi2, err=err)
-    pval1, pval2 = pvals[0], pvals[-1]
-    indices1, indices2 = indices[0], indices[-1]
-    i_k1 = pval1[0]
-    i_k2 = pval2[0]
-    # charges at the beginning and end of charge
-    q1 = np.polyval(pval1, time[indices1[-1]])  # take charge at last point of first step
-    q2 = np.polyval(pval2, time[indices2[0]])  # take charge at first point of first step
-    total_charge = q2 - q1
-    # times of beginning and end of charge
-    t1 = time[indices1[-1]]
-    t2 = time[indices2[0]]
-    # charge correction by leakage currents
-    total_charge -= 0.5 * (i_k1 + i_k2) * (t2 - t1)
-    # uncertainties
-    delta_t = np.mean(np.gradient(time))
-    total_charge_err = abs(2 * delta_t * (i_k1 + i_k2)) + 0.5 * abs(i_k1 - i_k2) * (t2 - t1)
-    if plot:
-        fig = plt.figure()
-        plt.plot(time, charge, "r+")
-        plt.plot(time, np.polyval(pval1, time))
-        plt.plot(time, np.polyval(pval2, time))
-        plt.title(f"Total charge: {total_charge:.4g} +/- {total_charge_err:.4g} [C]")
-        plt.axhline(q1, color="k", linestyle="--")
-        plt.axhline(q2, color="k", linestyle="--")
-        plt.axvline(t1, color="k", linestyle="--")
-        plt.axvline(t2, color="k", linestyle="--")
-        plt.xlabel("Time [s]")
-        plt.ylabel(f"Charge [C]")
-        plt.grid()
-        fig.tight_layout()
-        plt.show()
-    return total_charge, total_charge_err, i_k1, i_k2
-
-def groupBurstStartGuesses(nominal_timestamps, ungrouped_guess_indeces, min_sep = 20, verbose = 0):
     all_guesses_grouped = 0
     current_index = 0
     current_group = []
     guess_groups = []
     while not(all_guesses_grouped):
-        #print ('[current_group, current_index, start_guesses] = ' + str([current_group, current_index, start_guesses]))
         if len(current_group) == 0:
             current_group = [ungrouped_guess_indeces[current_index]]
         elif ungrouped_guess_indeces[current_index] - current_group[-1] < min_sep:
             current_group = current_group + [ungrouped_guess_indeces[current_index]]
         else:
-            #new_guess = np.mean([nominal_timestamps[index] for index in current_group])
             guess_groups = guess_groups + [current_group]
             current_group = [ungrouped_guess_indeces[current_index]]
         if current_index == len(ungrouped_guess_indeces) - 1:
-            #new_guess = np.mean([nominal_timestamps[index] for index in current_group])
             guess_groups = guess_groups + [current_group]
             all_guesses_grouped = 1
         else:
@@ -193,7 +53,19 @@ def groupBurstStartGuesses(nominal_timestamps, ungrouped_guess_indeces, min_sep 
     return guess_groups
 
 def findTransitions(arr, n_target_transitions, max_n_sig_to_identify = 14, min_n_sig_to_identify = 1, pos_or_neg = 1, verbose = 0, max_iterations = 20, min_data_sep = 10, show_process = 0):
-    #print ('Finding transitions...')
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
+
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
+
+    Description:
+    Takes an array of indeces of an array (integers) and sorts them into "groups" of nearby indeces.  For an
+        index to be placed in a group, it must be within min_sep distance from any other component of that group.
+
+    This function is used to separate distinct peaks above some detection threshold.
+    """
+    if verbose: print ('Finding transitions...')
     transitions = []
     low_n_sig = min_n_sig_to_identify
     high_n_sig = max_n_sig_to_identify
@@ -220,7 +92,7 @@ def findTransitions(arr, n_target_transitions, max_n_sig_to_identify = 14, min_n
             print ('current_n_sig = ' + str(current_n_sig))
         if len(transition_indeces) >= n_target_transitions:
             #print ('turn_on_guess_indeces = ' + str(turn_on_guess_indeces))
-            transitions = groupBurstStartGuesses(arr, transition_indeces, verbose = verbose, min_sep = min_data_sep)
+            transitions = groupBurstStartGuesses(transition_indeces, verbose = verbose, min_sep = min_data_sep)
         else:
             transitions = [arr[index] for index in transition_indeces]
         if verbose:
@@ -240,36 +112,23 @@ def findTransitions(arr, n_target_transitions, max_n_sig_to_identify = 14, min_n
         print ('Returning: ' + str([current_n_sig, transitions]))
     return [current_n_sig, transitions]
 
+def pieceFitCharge(xs, ys, piecewise_parts_indeces, verbose = 0, poly_fit_order = 2):
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
 
-def syncSCDataToSteps(SC_data, ref_burst_times, start_n_sig_to_identify = 14, n_sig_id_step = 1 ):
-    burst_starts = ref_burst_times[0]
-    burst_ends = ref_burst_times[1]
-    n_bursts = len(burst_starts)
-    burst_seps = [burst_ends[i] - burst_ends[0] for i in range(0, n_bursts)]
-    SC_std, SC_med = [np.std(np.gradient(SC_data[1])), np.std(np.gradient(SC_data[1]))]
-    turn_on_guesses = []
-    n_sig_id_burst = start_n_sig_to_identify + n_sig_id_step
-    print ('len(burst_seps) = ' + str(len(burst_seps)))
-    while len(turn_on_guesses) < len(burst_seps):
-        n_sig_id_burst = n_sig_id_burst - n_sig_id_step
-        turn_on_guess_indeces = [ i for i in range(len(SC_data[1])) if np.gradient(SC_data[1])[i] < SC_med - SC_std * n_sig_id_burst  ]
-        if len(turn_on_guess_indeces) >= len(ref_burst_times):
-            #print ('turn_on_guess_indeces = ' + str(turn_on_guess_indeces))
-            turn_on_guesses = groupBurstStartGuesses(SC_data[0], turn_on_guess_indeces)
-        print ('[turn_on_guesses, n_sig_id_burst] = ' + str([turn_on_guesses, n_sig_id_burst]))
-    #print ('turn_on_guesses = ' + str(turn_on_guesses))
-    turn_on_seps = [turn_on_guesses[i] - turn_on_guesses[0] for i in range(0, len(turn_on_guesses))]
-    #print ('burst_seps = ' + str(burst_seps))
-    #print ('turn_on_seps = ' + str(turn_on_seps))
-    #print( np.polyfit(turn_on_seps, burst_seps, 1) )
-    time_scaling = np.polyfit(turn_on_seps, burst_seps, 1)[0]
-    SC_time_seps = [elem - SC_data[0][0] for elem in SC_data[0]]
-    #print ('time_scaling = ' + str(time_scaling))
-    true_SC_time_seps = np.array(SC_time_seps) * time_scaling
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
 
-    return true_SC_time_seps
+    Description:
+    Fit the charge of two adjacent sections of a photodetector (solar cell or photodiode) readout (bursts on, charging with
+        photocurrent and dark current, or bursts off, charging with dark current).
+    The fit performs a fit of the specified polynomial order (default 2) to each section of the piecewise sections.  The
+        pivot between the piecewise data sections is also fitted and returned.
 
-def pieceFitCharge(xs, ys, piecewise_parts_indeces, verbose = 0):
+    Issues:
+    For short bursts, the fits can be underconstrained or just outright fail because there are insufficient data points
+       for a meaningful fit result.
+    """
     piecewise_parts_indeces = [0] + piecewise_parts_indeces + [len(xs) - 1]
     piecewise_poly_fits = [[] for i in range(len(piecewise_parts_indeces) - 1)]
     piecewise_exp_fits = [[] for i in range(len(piecewise_parts_indeces) - 1)]
@@ -315,7 +174,7 @@ def pieceFitCharge(xs, ys, piecewise_parts_indeces, verbose = 0):
                 print ('[centered_xs, centered_ys] = ' + str([centered_xs, piecewise_ys] ))
                 centered_lin_fit_terms = [0.0, 0.0 ]
             try:
-                centered_poly_fit = np.poly1d(np.polyfit(centered_xs, piecewise_ys, 2))
+                centered_poly_fit = np.poly1d(np.polyfit(centered_xs, piecewise_ys, poly_fit_order))
             except np.linalg.LinAlgError:
                 print ('[centered_xs, centered_ys] = ' + str([centered_xs, piecewise_ys] ))
                 centered_poly_fit = np.poly1d([0.0] + list(centered_lin_fit_terms))
@@ -346,6 +205,25 @@ def pieceFitCharge(xs, ys, piecewise_parts_indeces, verbose = 0):
     return [piecewise_parts_indeces, piecewise_poly_fits]
 
 def calculatePhotoChargesGivenTransitionFits(transition_charges, bad_data_indeces, orig_data, time_seps, n_bursts, current_neg = 0):
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
+
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
+
+    Description:
+    Given the piecewise fits of the accumullated charge, this function does the final arithmetic.  For each illuminated charging period,
+        the function calculates the differences between the beginning and end.  The dark current during this charging period is
+        calculated by measuring the slope of the prior and subsequent dark charging times and averaging those slopes.  Multiplying the
+        charging time by the dark current, we calculate the total accumulated dark charge.  We subtract that value from the total charge
+        accumulated during the illuminated charging period to acquire the total accumulated charge.
+    The function returns a list of length equal to the number of observed data points (typically number of observed wavelengths).  Each
+        component of the larger returned list is itself a list of length equal to the number of bursts.
+
+    Issues:
+    We do not presently report uncertainties in the inferred photocharges.  Having estimates of those, ideally from
+        uncertainties in the underlying fit, would be nice.
+    """
     charges = [[transition_charges[j][2 * i + 2] - transition_charges[j][2 * i + 1] for i in range(n_bursts)] for j in range(len(orig_data)) if not (j in bad_data_indeces)]
     charge_times = [[time_seps[j][2 * i + 2] - time_seps[j][2 * i + 1] for i in range(n_bursts)] for j in range(len(orig_data)) if not (j in bad_data_indeces)]
     dark_charges = [[transition_charges[j][2 * i + 1] - transition_charges[j][2 * i] for i in range(n_bursts + 1)] for j in range(len(orig_data)) if not (j in bad_data_indeces)]
@@ -357,16 +235,19 @@ def calculatePhotoChargesGivenTransitionFits(transition_charges, bad_data_indece
     photo_charges = [[(charges[j][i] - dark_charges_during_illumination[j][i]) * (-1 if current_neg else 1) for i in range(n_bursts)] for j in range(len(charges)) ]
     return photo_charges
 
-
-def smoothArray(array, smoothing):
-    if smoothing == 1:
-        smoothed = array
-    else:
-        smoothed = [np.mean(array[max(0, i - smoothing // 2):min(len(array), i + smoothing // 2 + 1)]) for i in range(len(array))]
-    #smoothed = np.convolve(array, smoothing_box, mode = 'same')
-    return smoothed
-
 def readInSCQEData(SC_QE_data_file):
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
+
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
+
+    Description:
+    Read in the laboratory measured QE of the monitoring solar cell and turn those discretely sampled data points into a single
+        queryable curve of QE vs wavelength.
+    The measured SC QE has many data points, with some underlying uncertainty.  So we must (and here do) average over the
+        distribution of measured QE points and THEN create a smooth interpolator of QE in wavelength.
+    """
     SC_QE_wavelengths, SC_QE_data = can.readInColumnsToList(SC_QE_data_file, delimiter = ', ', n_ignore = 1, convert_to_float = 1)
     SC_QE_wavelengths, SC_QE_data = can.safeSortOneListByAnother(SC_QE_wavelengths, [SC_QE_wavelengths, SC_QE_data])
     SC_QE_wavelength_correction = -5
@@ -379,6 +260,19 @@ def readInSCQEData(SC_QE_data_file):
     return SC_QE_interp
 
 def readInPDQEData(PD_QE_data_file):
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
+
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
+
+    Description:
+    Read in the laboratory measured QE of the monitoring photodiode and turn sampled data points into a single queryable
+        curve of QE vs wavelength.
+    The measured photodiode QE is based on Thorlabs reported measurements.  Thus, unlike the solar cell QE function, no
+        smoothing over scattered points is necessary.  However, we do need to convert the reported values of Amps/Watt
+        into our desired data set of e-/photon.
+    """
     astro_arch = apa.AstronomicalParameterArchive()
     PD_QE_wavelengths, PD_responsivity_data = can.readInColumnsToList(PD_QE_data_file, delimiter = ', ', n_ignore = 1, convert_to_float = 1)
     PD_QE_wavelengths, PD_responsivity_data = can.safeSortOneListByAnother(PD_QE_wavelengths, [PD_QE_wavelengths, PD_responsivity_data])
@@ -394,12 +288,24 @@ def readInPDQEData(PD_QE_data_file):
     return PD_QE_interp
 
 
-
 def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, max_val, photocharge_neg,
                            data_dir = '', read_in_data_clipping = 1,
                            max_std_to_identify_bursts = 14, min_std_to_identify_bursts = 0.25, min_data_sep_to_identify_bursts = 20,
-                           show_progress = 1, progress_plot_extra_title = '', save_transitions_plot = 1, save_plot_prefix = None,
-                           show_process = 0):
+                           show_burst_fits = 1, progress_plot_extra_title = '', save_transitions_plot = 1, save_plot_prefix = None,
+                           show_burst_id_process = 0):
+    """
+    authors: Sasha Brownsberger (sashab@alumni.stanford.edu)
+
+    Modifications:
+    2021/07/04 - 2021/07/14: First written.
+
+    Description:
+    This function does most of the work.  For a list of data files, associated illumination wavelengths, and the files
+       that contained the timestamps of the burst starts and ends, this function returns measurements of the photocharge
+       that each of the bursts generated in the detector.
+    This function does most of the work in this analysis.  It is the function that loops all of the above functions
+       together.
+    """
     bad_data_indeces = []
 
     data_sets = [can.readInColumnsToList(file, data_dir, delimiter = ', ', n_ignore = 1, convert_to_float = 1) for file in data_files]
@@ -414,7 +320,8 @@ def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, 
         print ([data_files[i] for i in sat_data_indeces])
     bad_data_indeces = can.union([bad_data_indeces, sat_data_indeces])
 
-    data_smoothed = [smoothArray(arr, smoothing) for arr in raw_charges]
+    #data_smoothed = [smoothArray(arr, smoothing) for arr in raw_charges]
+    data_smoothed = [can.smoothList(arr, smooth_type = 'boxcar', averaging = 'mean', params = [smoothing]) for arr in raw_charges]
     data_to_find_transitions = [np.gradient(np.gradient(arr)) for arr in data_smoothed]
 
     ref_times = [can.readInColumnsToList(file, data_dir, delimiter = ', ', n_ignore = 1, convert_to_float = 1) for file in ref_burst_timestamps_files]
@@ -424,8 +331,8 @@ def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, 
     burst_off_indeces = [[] for arr in data_smoothed]
     for i in range(len(data_smoothed)):
         arr = data_to_find_transitions[i]
-        burst_on_indeces[i] = findTransitions(arr[smoothing:-smoothing], n_bursts, max_n_sig_to_identify = max_std_to_identify_bursts, min_n_sig_to_identify = min_std_to_identify_bursts, pos_or_neg = (-1 if photocharge_neg else 1), min_data_sep = min_data_sep_to_identify_bursts, show_process = show_process, verbose = show_process)
-        burst_off_indeces[i] = findTransitions(arr[smoothing:-smoothing], n_bursts, max_n_sig_to_identify = max_std_to_identify_bursts, min_n_sig_to_identify = min_std_to_identify_bursts, pos_or_neg = (1 if photocharge_neg else -1), min_data_sep = min_data_sep_to_identify_bursts, show_process = show_process, verbose = show_process)
+        burst_on_indeces[i] = findTransitions(arr[smoothing:-smoothing], n_bursts, max_n_sig_to_identify = max_std_to_identify_bursts, min_n_sig_to_identify = min_std_to_identify_bursts, pos_or_neg = (-1 if photocharge_neg else 1), min_data_sep = min_data_sep_to_identify_bursts, show_process = show_burst_id_process, verbose = show_burst_id_process)
+        burst_off_indeces[i] = findTransitions(arr[smoothing:-smoothing], n_bursts, max_n_sig_to_identify = max_std_to_identify_bursts, min_n_sig_to_identify = min_std_to_identify_bursts, pos_or_neg = (1 if photocharge_neg else -1), min_data_sep = min_data_sep_to_identify_bursts, show_process = show_burst_id_process, verbose = show_burst_id_process)
         if i == 28:
             print ('burst_on_indeces = ' + str(burst_on_indeces[i]))
         burst_on_indeces[i] = [burst_on_indeces[i][0], [int(np.median(index_set)) + smoothing for index_set in burst_on_indeces[i][1]] ]
@@ -437,10 +344,6 @@ def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, 
     if len(failed_burst_id_indeces ) > 0:
         print ('The following files failed to identify all ' + str(n_bursts) + ' bursts in the this data set.  We will mark it as a bad observation: ')
         print ([data_files[i] for i in failed_burst_id_indeces ])
-        #print ('Here is what the problematic data look like: ' )
-        #for index in failed_burst_id_indeces:
-        #    plt.plot(data_to_find_transitions[index])
-        #    plt.show()
 
     bad_data_indeces = can.union([bad_data_indeces, failed_burst_id_indeces])
 
@@ -452,23 +355,11 @@ def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, 
     if len(bursts_out_of_order_indeces ) > 0:
         print ('The following files identified burst starts and ends out of order. We will mark it as a bad observation: ')
         print ([data_files[i] for i in bursts_out_of_order_indeces ])
-        #print ('Here were the burst on and off indeces of those problematic files, and what the data look like: ')
-        #for index in bursts_out_of_order_indeces:
-        #    print ('index = ' + str(index))
-        #    print ('burst_off_indeces[index] = ' + str(burst_off_indeces[index]))
-        #    print ('burst_on_indeces[index] = ' + str(burst_on_indeces[index]))
-        #    plt.plot(data_to_find_transitions[index])
-        #    plt.show()
     bad_data_indeces = can.union([bad_data_indeces, bursts_out_of_order_indeces])
 
     corrected_times = [[] for i in range(len(uncorrected_times))]
     time_sep_fits = [[] for i in range(len(uncorrected_times))]
     for i in range(0, len(uncorrected_times)):
-        if i == 28:
-            print ('i = ' + str(i) )
-            print ('data_files[i] = ' + str(data_files[i] ))
-            print ('len(uncorrected_times[i]) = ' + str(len(uncorrected_times[i])))
-            print ('burst_on_indeces[i][1] = ' + str(burst_on_indeces[i][1]))
         turn_on_times = [uncorrected_times[i][index] for index in burst_on_indeces[i][1]]
         deltaT_turn_on = [turn_on - turn_on_times[0] for turn_on in turn_on_times]
         if np.sum(deltaT_turn_on) == 0:
@@ -497,105 +388,137 @@ def measureDetectorCharges(wavelengths, data_files, timestamp_files, smoothing, 
 
     charges_by_wavelength_dict = {good_wavelengths[i]: photo_charges[i] for i in range(len(good_wavelengths))}
 
-    print ('bad_data_indeces = ' + str(bad_data_indeces))
-    for j in range(len(data_sets)):
-        if not (j in bad_data_indeces):
-            f, axarr = plt.subplots(2,1)
-            axarr[0].plot(corrected_times[j], np.array(raw_charges[j]) * 10.0 ** 6.0, c = 'k')
-            axarr[0].set_ylabel('Charge $(\mu C)$')
-            axarr[0].set_title(progress_plot_extra_title + ': ' + data_files[j])
-            axarr[0].scatter(transition_times[j], np.array(transition_charges[j]) * 10.0 ** 6.0 , marker = 'x', c = 'orange')
-            #[axarr[0].axvline(SC_data[j][0][index], color = 'r') for index in SC_transition_indeces[j][1]]
-            axarr[1].plot(corrected_times[j], np.array(data_to_find_transitions[j]) * 10.0 ** 6.0 * time_sep_fits[j][0] ** -2.0, c = 'k')
-            axarr[1].set_xlabel(r'$\Delta t$ (s)')
-            axarr[1].set_ylabel('Charge 2nd deriv $(\mu C \ s^{-2})$')
-            for i in range(len(transition_indeces[j]) // 2):
-                off_index = transition_indeces[j][2 * i]
-                on_index = transition_indeces[j][2 * i + 1]
-                axarr[0].axvline(corrected_times[j][on_index], color = 'g', linestyle = '--', alpha = 0.5)
-                axarr[0].axvline(corrected_times[j][off_index], color = 'r', linestyle = '--', alpha = 0.5)
-                axarr[1].axvline(corrected_times[j][on_index], color = 'g', linestyle = '--', alpha = 0.5)
-                axarr[1].axvline(corrected_times[j][off_index], color = 'r', linestyle = '--', alpha = 0.5)
-            #[axarr[1].axvline(PD_data[j][0][index], color = 'g') for index in PD_transition_indeces[j][1]]
-            #[axarr[1].axvline(PD_data[j][0][index], color = 'r') for index in PD_transition_indeces[j][1]]
-            axarr[0].set_title(progress_plot_extra_title  + r' data for $\lambda = $' + str(wavelengths[j]) + 'nm')
-            plt.gcf().subplots_adjust(left=0.12)
-            plt.draw()
-            plt.pause(0.25)
+    #print ('bad_data_indeces = ' + str(bad_data_indeces))
+    if show_burst_fits:
+        for j in range(len(data_sets)):
+            if not (j in bad_data_indeces):
+                print ('[len(piece_fits[j][0]), len(piece_fits[j][1])] = ' + str([len(piece_fits[j][0]), len(piece_fits[j][1])]))
+                f, axarr = plt.subplots(3,1, figsize = [12, 9])
+                axarr[0].plot(corrected_times[j], np.array(raw_charges[j]) * 10.0 ** 6.0, c = 'k')
+                axarr[0].set_ylabel('Charge $(\mu C)$')
+                axarr[0].set_title(progress_plot_extra_title + ': ' + data_files[j])
+                axarr[0].scatter(transition_times[j], np.array(transition_charges[j]) * 10.0 ** 6.0 , marker = 'x', c = 'orange')
+                #[axarr[0].axvline(SC_data[j][0][index], color = 'r') for index in SC_transition_indeces[j][1]]
+                axarr[1].plot(corrected_times[j], np.array(data_to_find_transitions[j]) * 10.0 ** 6.0 * time_sep_fits[j][0] ** -2.0, c = 'k')
+                axarr[1].set_xlabel(r'$\Delta t$ (s)')
+                axarr[1].set_ylabel('Charge 2nd deriv $(\mu C \ s^{-2})$')
+                for i in range(len(transition_indeces[j]) // 2):
+                    off_index = transition_indeces[j][2 * i]
+                    on_index = transition_indeces[j][2 * i + 1]
+                    axarr[0].axvline(corrected_times[j][on_index], color = 'g', linestyle = '--', alpha = 0.5)
+                    axarr[0].axvline(corrected_times[j][off_index], color = 'r', linestyle = '--', alpha = 0.5)
+                    axarr[1].axvline(corrected_times[j][on_index], color = 'g', linestyle = '--', alpha = 0.5)
+                    axarr[1].axvline(corrected_times[j][off_index], color = 'r', linestyle = '--', alpha = 0.5)
+                #[axarr[1].axvline(PD_data[j][0][index], color = 'g') for index in PD_transition_indeces[j][1]]
+                #[axarr[1].axvline(PD_data[j][0][index], color = 'r') for index in PD_transition_indeces[j][1]]
+                axarr[0].set_title(progress_plot_extra_title  + r' data for $\lambda = $' + str(wavelengths[j]) + 'nm')
+                [axarr[2].plot(transition_times[j][piece_fits[j][0][i]:piece_fits[j][0][i+1]], piece_fits[j][1][i]( transition_times[j][piece_fits[j][0][i]:piece_fits[j][0][i+1]] ) * 10.0 ** 6.0, c = 'red') for i in range(len(piece_fits[j][1]))]
+                plt.gcf().subplots_adjust(left=0.12)
+                plt.draw()
+                plt.pause(0.25)
 
-            if save_transitions_plot and save_plot_prefix != None:
-                plt.savefig(data_dir + save_plot_prefix + str(wavelengths[j]) + '.pdf')
-            plt.close('all')
+                if save_transitions_plot and save_plot_prefix != None:
+                    plt.savefig(data_dir + save_plot_prefix + str(wavelengths[j]) + '.pdf')
+                plt.close('all')
 
     return charges_by_wavelength_dict
 
 
 if __name__=="__main__":
+    """
+    This function is designed to be run from the command line (NOT directly in a Python environment), as follows:
+    (bash) $ python AnalyzeFrenchWavelengthScans.py
+
+    All of the variables that you might want to change, scan to scan, are directly below.  These include:
+    wavelengths    => The scanned wavelengths.
+    data_root      => The super directory where all of the data generally accumulated (probably don't
+                          want to change often).
+    QSWs           => The laser QSW (intensity) settings.  Must be a list, even if only one value.
+    Pinholes       => The pinhole or iris setting feeding the CBP used in the observations.  Must be a
+                          list, even if only one value.
+    other_suffixes => The other suffixes added to the file names.  Must be a list, even if only one value.
+
+    """
+
+    ##### HERE IS THE STUFF THAT YOU MIGHT WANT TO MODIFY FOR EACH RUN #####
+
+    wavelengths = np.arange(350, 1050, 5)
+    wavelengths = np.arange(1000, 1050, 5)
+    wavelengths = np.arange(400, 450, 5)
+    data_root = '../data/CBP_throughput_calib_data/'
+    #To add additional layers of file suffixes, append additional layers of list in the flattenListOfLists function below.
+    #   Even if your suffix categories are only one element long, they must be in a list.
+    QSWs = ['Max']
+    pinholes = ['_5mmPin3']
+    other_suffixes = ['_LinTest']
+    data_dir = data_root + 'ut20210713/LinearityScans/QSWMax/'
+    save_str = 'QSWMax_5mmPin'
+
+    #### [END STUFF YOU FREQUENTLY WANT TO MODIFY] #####
+
+    #### HERE ARE SOME CODED PARAMETERS THAT YOU COULD CHANGE, BUT ONLY IF THE DATA STREAM SETUP CHANGES IN A WAY THAT DOES NOT HAPPEN REGULARLY
+    file_suffixes = can.flattenListOfLists([[[['_Wave' + str(wave) + '_QSW' + str(QSW) + str(pinhole) + str(other) + '.csv' for wave in wavelengths  ] for QSW in QSWs] for pinhole in pinholes ] for other in other_suffixes], fully_flatten = 1)
+    print ('file_suffixes = '  + str(file_suffixes))
+    #If the base names of the saved solar cell, photodiode, or burst times are changed, these files should be changed.
+    SC_data_files = [ 'SolarCell_fromB2987A' + suffix for suffix in file_suffixes ]
+    PD_data_files = ['Photodiode_fromKeithley' + suffix for suffix in file_suffixes ]
+    ref_burst_timestamps_files = ['LaserBurstTimes' + suffix for suffix in file_suffixes ]
+
+    #The data files from which the reference QEs of the solar cell and photodiode are pulled.
+    #   If you want a new QE curve, here is where you put the new QE file.
+    ref_data_root = '../refCalData/'
+    SC_QE_data_file = ref_data_root + 'SC_QE_from_mono_SC_ED_20210618_MultiDay.txt'
+    PD_QE_data_file = ref_data_root + 'SM05PD1B_QE.csv'
     SC_current_neg = 0
     PD_current_neg = 1
-    wavelengths = np.arange(350, 670, 1).tolist() + np.arange(680, 1050, 15).tolist()
-    wavelengths = np.arange(350, 1050, 5)
-    #wavelengths = [400, 800]
-    wavelength_range = [min(wavelengths),  max(wavelengths)]
-    data_index_to_study = 0
     max_SC_val = 2e-6
     max_PD_val = 1e-3
     SC_smoothing = 10 #How many adjacent solar cell samples should we sum when looking for the bursts?
     PD_smoothing = 1 #How many adjacent photodiode samples should we sum when looking for the bursts?
-    #n_points_ignore_transition_id = 4 #We identify transitions by looking at 2nd numerical derivative => need to ignore some data points.
 
-    ref_data_root = '../refCalData/'
-    data_root = '../data/CBP_throughput_calib_data/'
-    file_suffixes = can.flattenListOfLists([['_Wave' + str(wave) + '_QSWMax_' + str(iris_setting) + '.csv' for wave in wavelengths  ] for iris_setting in ['5mmPin3_AmbLight' ] ])
-    n_pulses = [100 for suffix in file_suffixes]
-    data_dir = data_root + 'ut20210713/CBPOffTarget/'
-    SC_data_files = [ 'SolarCell_fromB2987A' + suffix for suffix in file_suffixes ]
-    PD_data_files = ['Photodiode_fromKeithley' + suffix for suffix in file_suffixes ]
-    ref_burst_timestamps_files = ['LaserBurstTimes' + suffix for suffix in file_suffixes ]
-    SC_QE_data_file = ref_data_root + 'SC_QE_from_mono_SC_ED_20210618_MultiDay.txt'
-    PD_QE_data_file = ref_data_root + 'SM05PD1B_QE.csv'
-    save_str = 'QSW293_5mmPin'
+    #### [END STUFF YOU MIGHT WANT TO MODIFY] #####
 
-    SC_photo_charges_by_wavelength_dict = measureDetectorCharges(wavelengths, SC_data_files, ref_burst_timestamps_files, SC_smoothing, max_SC_val, progress_plot_extra_title = 'SC', photocharge_neg = SC_current_neg, data_dir = data_dir, save_transitions_plot = 1, save_plot_prefix = save_str + '_SC_Readout_with_burst_ids_', show_process = 0, min_data_sep_to_identify_bursts = 10)
+    wavelength_range = [min(wavelengths),  max(wavelengths)]
+    astro_arch = apa.AstronomicalParameterArchive()
+    eletron_charge_in_C = astro_arch.getElectronCharge()
+    SC_QE_interp = readInSCQEData(SC_QE_data_file)
+    PD_QE_interp = readInPDQEData(PD_QE_data_file)
+    #Make plots of the background data that we used in our measurements
+    SC_QE_plot = plt.plot(wavelengths, SC_QE_interp(wavelengths), c = 'k')[0]
+    PD_QE_plot = plt.plot(wavelengths, PD_QE_interp(wavelengths), c = 'r')[0]
+    plt.xlabel('Wavelength (nm)')
+    plt.ylabel(r'SC QE (e-/$\gamma$)')
+    plt.legend([SC_QE_plot, PD_QE_plot], ['SC QE (measured)', 'PD QE (from ThorLabs)'])
+    plt.savefig('../data/CBP_throughput_calib_data/' + save_str + 'PD_and_SC_QEs.pdf')
+    plt.close('all' )
+
+    double_Al_wavelength, Double_Al_responsivity = can.readInColumnsToList('../data/CBP_throughput_calib_data/' + 'TwoBounceAl.dat', delimiter = ', ', n_ignore = 1, convert_to_float = 1)
+    al_responsivity = plt.plot(double_Al_wavelength, Double_Al_responsivity, c = 'k')[0]
+    plt.xlabel('Wavelength (nm)')
+    plt.ylabel('Responsivity')
+    plt.legend([al_responsivity], ['2 Reflections off Aluminum'])
+    plt.savefig('../data/CBP_throughput_calib_data/' + save_str + 'TwoBounceAl.pdf')
+    plt.close('all' )
+
+    #Start the analysis, going through each solar cell data file and looking for the correct number of bursts. Then do the same of the photodiode.
+    SC_photo_charges_by_wavelength_dict = measureDetectorCharges(wavelengths, SC_data_files, ref_burst_timestamps_files, SC_smoothing, max_SC_val, progress_plot_extra_title = 'SC', photocharge_neg = SC_current_neg, data_dir = data_dir, save_transitions_plot = 1, save_plot_prefix = save_str + '_SC_Readout_with_burst_ids_', show_burst_id_process = 0, min_data_sep_to_identify_bursts = 10)
     SC_good_wavelengths = list(SC_photo_charges_by_wavelength_dict.keys())
-    PD_photo_charges_by_wavelength_dict = measureDetectorCharges(wavelengths, PD_data_files, ref_burst_timestamps_files, PD_smoothing, max_PD_val, progress_plot_extra_title = 'PD', photocharge_neg = PD_current_neg, data_dir = data_dir, save_transitions_plot = 1, save_plot_prefix = save_str + '_PD_Readout_with_burst_ids_', show_process = 0, min_data_sep_to_identify_bursts = 3)
+    PD_photo_charges_by_wavelength_dict = measureDetectorCharges(wavelengths, PD_data_files, ref_burst_timestamps_files, PD_smoothing, max_PD_val, progress_plot_extra_title = 'PD', photocharge_neg = PD_current_neg, data_dir = data_dir, save_transitions_plot = 1, save_plot_prefix = save_str + '_PD_Readout_with_burst_ids_', show_burst_id_process = 0, min_data_sep_to_identify_bursts = 3)
     PD_good_wavelengths = list(PD_photo_charges_by_wavelength_dict.keys())
     shared_good_wavelengths = can.intersection(SC_good_wavelengths, PD_good_wavelengths)
     print ('SC_good_wavelengths = ' + str(SC_good_wavelengths))
     print ('PD_good_wavelengths = ' + str(PD_good_wavelengths))
     print ('shared_good_wavelengths = ' + str(shared_good_wavelengths))
 
-    SC_QE_interp = readInSCQEData(SC_QE_data_file)
-    PD_QE_interp = readInPDQEData(PD_QE_data_file)
-
-    SC_QE_plot = plt.plot(wavelengths, SC_QE_interp(wavelengths), c = 'k')[0]
-    PD_QE_plot = plt.plot(wavelengths, PD_QE_interp(wavelengths), c = 'r')[0]
-    plt.xlabel('Wavelength (nm)')
-    plt.ylabel(r'SC QE (e-/$\gamma$)')
-    plt.legend([SC_QE_plot, PD_QE_plot], ['SC QE (measured)', 'PD QE (from ThorLabs)'])
-    plt.savefig(data_root + save_str + 'PD_and_SC_QEs.pdf')
-    plt.close('all' )
-
-    double_Al_wavelength, Double_Al_responsivity = can.readInColumnsToList(data_root + 'TwoBounceAl.dat', delimiter = ', ', n_ignore = 1, convert_to_float = 1)
-    al_responsivity = plt.plot(double_Al_wavelength, Double_Al_responsivity, c = 'k')[0]
-    plt.xlabel('Wavelength (nm)')
-    plt.ylabel('Responsivity')
-    plt.legend([al_responsivity], ['2 Reflections off Aluminum'])
-    plt.savefig(data_root + save_str + 'TwoBounceAl.pdf')
-    plt.close('all' )
-
+    #Compute the quantities we want by averaging over the bursts at each wavelength, and applying the appropriate conversions.
     SC_over_PD_charge_ratio = [ np.mean(np.array(SC_photo_charges_by_wavelength_dict[wave]) / np.array(PD_photo_charges_by_wavelength_dict[wave])) for wave in shared_good_wavelengths ]
-    #SC_photons_over_PD_electrons = SC_over_PD_charge_ratio / SC_QE_interp([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)])
     SC_photons_over_PD_electrons = SC_over_PD_charge_ratio / SC_QE_interp([wave for wave in shared_good_wavelengths])
-    #SC_phot_over_PD_phot = SC_over_PD_charge_ratio / SC_QE_interp([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)]) * PD_QE_interp([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)])
     SC_phot_over_PD_phot = SC_over_PD_charge_ratio / SC_QE_interp([wave for wave in shared_good_wavelengths]) * PD_QE_interp([wave for wave in shared_good_wavelengths])
-
-
     min_SC_charge, max_SC_charge = [np.min([np.median(SC_photo_charges_by_wavelength_dict[wave]) for wave in SC_good_wavelengths]), np.max([np.median(SC_photo_charges_by_wavelength_dict[wave]) for wave in SC_good_wavelengths])]
     min_PD_charge, max_PD_charge = [np.min([np.median(PD_photo_charges_by_wavelength_dict[wave]) for wave in PD_good_wavelengths]), np.max([np.median(PD_photo_charges_by_wavelength_dict[wave]) for wave in PD_good_wavelengths])]
+
+    #Plot the results and save them to plain text, .csv files.
     f, axarr = plt.subplots(2,1, sharex = True, figsize = [10, 6] )
-    #axarr[0].plot([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], [np.median(SC_charges[i]) / max_SC_charge for i in range(len(SC_charges)) if not(i in bad_data_indeces)])
-    #axarr[1].plot([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], [np.median(PD_charges[i]) / max_PD_charge for i in range(len(PD_charges)) if not(i in bad_data_indeces)])
     axarr[0].plot(SC_good_wavelengths, [np.median(SC_photo_charges_by_wavelength_dict[wave]) / max_SC_charge for wave in SC_good_wavelengths ])
     axarr[1].plot(PD_good_wavelengths, [np.median(PD_photo_charges_by_wavelength_dict[wave]) / max_PD_charge for wave in PD_good_wavelengths ])
     axarr[1].set_xlabel('Laser wavelength (nm)')
@@ -606,10 +529,9 @@ if __name__=="__main__":
     plt.savefig(data_dir + save_str + 'PD_and_SC_normalized_photocharges.pdf')
     plt.gcf().subplots_adjust(left=0.12)
     plt.show()
-    can.saveListsToColumns([SC_good_wavelengths, [np.median(SC_photo_charges_by_wavelength_dict[wave]) for wave in SC_good_wavelengths]], save_str + 'SC_charges.csv', data_dir, sep = ', ', header = 'Wavelength(nm), SC charge (e-), PD charge (e-)')
-    can.saveListsToColumns([PD_good_wavelengths, [np.median(PD_photo_charges_by_wavelength_dict[wave]) for wave in PD_good_wavelengths]], save_str + 'PD_charges.csv', data_dir, sep = ', ', header = 'Wavelength(nm), SC charge (e-), PD charge (e-)')
+    can.saveListsToColumns([SC_good_wavelengths, [np.median(SC_photo_charges_by_wavelength_dict[wave]) / eletron_charge_in_C * 10.0 ** -6.0  for wave in SC_good_wavelengths]], save_str + 'SC_charges.csv', data_dir, sep = ', ', header = 'Wavelength(nm), SC charge (10^6 e-), PD charge (10^6 e-)')
+    can.saveListsToColumns([PD_good_wavelengths, [np.median(PD_photo_charges_by_wavelength_dict[wave]) / eletron_charge_in_C * 10.0 ** -6.0  for wave in PD_good_wavelengths]], save_str + 'PD_charges.csv', data_dir, sep = ', ', header = 'Wavelength(nm), SC charge (10^6 e-), PD charge (10^6 e-)')
 
-    #plt.plot([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], SC_phot_over_PD_phot, c ='k')
     plt.plot(shared_good_wavelengths, SC_phot_over_PD_phot, color ='k', marker = 'x')
     plt.xlabel('Laser wavelength (nm)')
     plt.ylabel('SC Int. Charge / PD Int. Charge')
@@ -617,22 +539,16 @@ if __name__=="__main__":
     plt.savefig(data_dir + save_str + 'SC_charge_over_PD_charge.pdf')
     plt.close('all')
 
-    #plt.plot([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], SC_photons_over_PD_electrons, c ='k')
     plt.plot(shared_good_wavelengths, SC_photons_over_PD_electrons, color ='k', marker = 'x')
     plt.xlabel('Laser wavelength (nm)')
     plt.ylabel('SC photons / PD electrons')
-    #plt.ylim([1500, 19000])
     plt.savefig(data_dir + save_str + 'SC_photons_over_PD_photons.pdf')
     plt.show()
-    #can.saveListsToColumns([[wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], SC_photons_over_PD_electrons], save_str + 'SC_photons_over_PD_electrons.txt', data_dir, sep = ', ', header = 'Wavelength(nm), SC photons / PD electrons')
     can.saveListsToColumns([shared_good_wavelengths, SC_photons_over_PD_electrons], save_str + 'SC_photons_over_PD_electrons.txt', data_dir, sep = ', ', header = 'Wavelength(nm), SC photons / PD electrons')
 
-    #plt.plot([wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], SC_phot_over_PD_phot, c ='k')
     plt.plot(shared_good_wavelengths, SC_phot_over_PD_phot, color ='k', marker = 'x')
     plt.xlabel('Laser wavelength (nm)')
     plt.ylabel('SC photons / PD photons')
-    #plt.ylim([1900, 4100])
     plt.savefig(data_dir + save_str + 'SC_photons_over_PD_photons.pdf')
     plt.show()
-    #can.saveListsToColumns([[wavelengths[i] for i in range(len(wavelengths)) if not(i in bad_data_indeces)], SC_phot_over_PD_phot], save_str + 'SC_photons_over_PD_photons.txt', data_dir, sep = ', ', header = 'Wavelength(nm), SC photons / PD photons')
     can.saveListsToColumns([shared_good_wavelengths, SC_phot_over_PD_phot], save_str + 'SC_photons_over_PD_photons.txt', data_dir, sep = ', ', header = 'Wavelength(nm), SC photons / PD photons')

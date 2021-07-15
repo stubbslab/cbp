@@ -20,7 +20,7 @@ import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 import operator as op
 from functools import reduce
-#from PyAstronomy import pyasl
+from PyAstronomy import pyasl
 import AstronomicalParameterArchive as apa
 from datetime import datetime
 
@@ -412,7 +412,7 @@ def measureAngularSeparationOnSky(obj1_pos, obj2_pos, return_radian = 0):
     NOTE: If you want to use this cantrip, you need to uncomment the
     #from PyAstronomy import pyasl
     line at the begining of the file.  It is commented out by default since it's an unusual library that we
-    don't want to force everyone to import if they don't need this function. 
+    don't want to force everyone to import if they don't need this function.
     """
     ang_sep = pyasl.getAngDist(obj1_pos[0], obj1_pos[1], obj2_pos[0], obj2_pos[1])
     if return_radian:
@@ -1594,7 +1594,7 @@ def getElementsOfOneListNotInAnother(existingList, removingList):
     return remaining_list
 
 
-def flattenListOfLists(list_to_flatten):
+def flattenListOfLists(list_to_flatten, fully_flatten = 0):
     """
     Take a list of sub-lists and combine the elements of each of those lists into a list.
     Note: we only reduce the number of lists by 1.  Repetitive calls can flatten further.
@@ -1606,7 +1606,10 @@ def flattenListOfLists(list_to_flatten):
     [1, 2, 1, 2, 10, 20, 10, 20, 100, 200, 100, 200]
     """
     #print ('Flattening a list...')
-    return [item for sublist in list_to_flatten for item in sublist]
+    flattened_list = [item for sublist in list_to_flatten for item in sublist]
+    if fully_flatten and type(flattened_list[0]) == list:
+        flattened_list = flattenListOfLists(flattened_list, fully_flatten = fully_flatten)
+    return flattened_list
 
 
 def removeFileTagFromString(file_name):
