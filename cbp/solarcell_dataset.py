@@ -663,7 +663,8 @@ class SolarCellDataSet:
         """
         in seconds
         """
-        charge_deriv2 = np.gradient(np.gradient(self.sc.data["charge"]))
+        from scipy.signal import find_peaks_cwt, medfilt, savgol_filter
+        charge_deriv2 = np.gradient(np.gradient(savgol_filter(self.sc.data["charge"], 11, polyorder=1)))
         cur, indeces = findTransitions(charge_deriv2, n_target_transitions=self.nbursts, pos_or_neg=1, min_data_sep=20)
         cur2, indeces2 = findTransitions(charge_deriv2, n_target_transitions=5, pos_or_neg=-1, min_data_sep=20)
         if cur != -1 and cur2 != -1:
