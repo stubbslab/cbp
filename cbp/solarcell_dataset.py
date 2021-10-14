@@ -427,16 +427,19 @@ def get_solarcell_total_charge(time, charge, time_breaks, err=None, plot=False):
     # pvals, indices = fit_line_pieces(time, charge, delta_chi2=delta_chi2, err=err, min_len=min_len, deg=deg)
     # print("first pval", len(pvals), pvals)
     # compute durations of dark and signal parts
-    bounds = [[0.9 * t, 1.1 * t] for t in time_breaks]
+    # bounds = [[0.9 * t, 1.1 * t] for t in time_breaks]
+    t_bound = 0.1
+    bounds = [[t-t_bound, t+t_bound] for t in time_breaks]
     # fit the data for 2*nbursts+1 line segments, continuous
     my_pwlf = pwlf.PiecewiseLinFit(time, charge, weights=1 / err, degree=1)
-    my_pwlf.fit_guess(time_breaks, bounds=bounds)
+    my_pwlf.fit_guess(time_breaks, bounds=bounds, epsilon=1e-4)
     # compute uncertainties
     my_pwlf.p_values(method='non-linear', step_size=1e-4)
     betas = my_pwlf.beta
     breaks = my_pwlf.fit_breaks
     beta_errs = np.copy(my_pwlf.se[:my_pwlf.beta.size])
-    break_errs = np.array([0] + list(my_pwlf.se[my_pwlf.beta.size:]) + [0])
+    t_step = np.median(np.gradient(time))
+    break_errs = np.array([0] + list(my_pwlf.se[my_pwlf.beta.size:]) + [0]) + t_step
     # convert fitted result into numpy pval form
     pvals = [[betas[1], betas[0] - betas[1] * breaks[0]]]
     pvals_err = [
@@ -692,7 +695,7 @@ class SolarCellRun:
         self.names = ["laserfilter", "qsw", "set_nbursts", "set_npulses", "set_wl", "pd_charge_total",
                       "pd_charge_total_err",
                       "sc_charge_total", "sc_charge_total_err", "pd_ik1", "pd_ik2", "sc_ik1", "sc_ik2"]
-
+        
     def load(self):
         for filename in tqdm(self.filenames[::]):
             if "~" in filename:
@@ -706,13 +709,12 @@ class SolarCellRun:
                                                                                "SolarCell_fromB2987A_")),
                                      npulses=npulses, wavelength=wavelength, nbursts=self.nbursts, qsw=qsw,
                                      laserfilter=flt)
-                self.data_sets.append(d)
             elif ".fits" in filename:
                 hdu = fits.open(os.path.join(self.directory_path, filename), memmap=False)
                 d = SolarCellDataSet(hdu=hdu)
                 d.filename = filename
                 hdu.close()
-                self.data_sets.append(d)
+            self.data_sets.append(d)
         self.laser_set_wavelengths = np.unique([d.wavelength for d in self.data_sets])
         self.laser_set_npulses = np.unique([d.npulses for d in self.data_sets])
         self.laser_set_nbursts = np.unique([d.nbursts for d in self.data_sets])
@@ -745,6 +747,105 @@ class SolarCellRun:
                 f"SolarCellDataSet with laser_set_wavelength={laser_set_wavelength} and nbursts={nbursts}"
                 f" not in {self.directory_path}.")
 
+    def process_data(self, id):
+        d = self.data_sets[id]
+        for name in self.names:
+            self.data[name][id] = 0
+        self.data["set_nbursts"][id] = d.nbursts
+        self.data["set_npulses"][id] = d.npulses
+        self.data["set_wl"][id] = d.wavelength
+        self.data["qsw"][id] = d.laserqsw
+        self.data["laserfilter"][id] = d.laserwheelfilter
+
+        noise = estimate_noise(d.sc.data["time"], d.sc.data["charge"])
+        err = noise * np.ones_like(d.sc.data["time"])
+        time_breaks = d.get_time_breaks()
+        # d.plot_data_set()
+        try:
+            charge_sc, charge_sc_err, i_k1, i_k2, pvals_sc, indices_sc = get_solarcell_total_charge(
+                d.sc.data["time"], d.sc.data["charge"], time_breaks=time_breaks, err=err, plot=False)
+            self.data["sc_charge_total"][id] = charge_sc
+            self.data["sc_charge_total_err"][id] = charge_sc_err
+            self.data["sc_ik1"][id] = i_k1
+            self.data["sc_ik2"][id] = i_k2
+        except np.linalg.LinAlgError:
+            print("Error. Skip ", d.filename)
+            pass
+        # try:
+        charge_pd, charge_pd_err, i_k1, i_k2, pvals_pd, indices_pd = get_photodiode_total_charge(
+            d.pd.data["time"], d.pd.data["charge"], delta_chi2=10, min_len=2,
+            err=0.5e-11 * np.ones_like(d.pd.data["time"]), plot=False)
+        self.data["pd_charge_total"][id] = charge_pd
+        self.data["pd_charge_total_err"][id] = charge_pd_err
+        self.data["pd_ik1"][id] = i_k1
+        self.data["pd_ik2"][id] = i_k2
+        print(id, "done")
+        # except:
+        #    print("Skip ?", filename)
+        #    pass
+
+    def process_data_multi(self, id, catalog):
+        d = self.data_sets[id]
+        for name in self.names:
+            self.data[name] = 0
+        catalog["set_nbursts"][id] = d.nbursts
+        catalog["set_npulses"][id] = d.npulses
+        catalog["set_wl"][id] = d.wavelength
+        catalog["qsw"][id] = d.laserqsw
+        catalog["laserfilter"][id] = d.laserwheelfilter
+
+        noise = estimate_noise(d.sc.data["time"], d.sc.data["charge"])
+        err = noise * np.ones_like(d.sc.data["time"])
+        time_breaks = d.get_time_breaks()
+        # d.plot_data_set()
+        try:
+            charge_sc, charge_sc_err, i_k1, i_k2, pvals_sc, indices_sc = get_solarcell_total_charge(
+                d.sc.data["time"], d.sc.data["charge"], time_breaks=time_breaks, err=err, plot=False)
+            catalog["sc_charge_total"][id] = charge_sc
+            catalog["sc_charge_total_err"][id] = charge_sc_err
+            catalog["sc_ik1"][id] = i_k1
+            catalog["sc_ik2"][id] = i_k2
+        except np.linalg.LinAlgError:
+            print("Error. Skip ", d.filename)
+            pass
+        # try:
+        charge_pd, charge_pd_err, i_k1, i_k2, pvals_pd, indices_pd = get_photodiode_total_charge(
+            d.pd.data["time"], d.pd.data["charge"], delta_chi2=10, min_len=2,
+            err=0.5e-11 * np.ones_like(d.pd.data["time"]), plot=False)
+        catalog["pd_charge_total"][id] = charge_pd
+        catalog["pd_charge_total_err"][id] = charge_pd_err
+        catalog["pd_ik1"][id] = i_k1
+        catalog["pd_ik2"][id] = i_k2
+        print(id, "done")
+        # except:
+        #    print("Skip ?", filename)
+        #    pass
+
+    def solarcell_characterization_test(self):
+        #from joblib import Parallel, delayed
+        #self.data_sets = Parallel(n_jobs=10, verbose=10, backend="threading")(
+        #     delayed(self.process_data)(id) for id in tqdm(range(self.ndata)))
+        from multiprocessing import Process, Manager, Pool
+        manager = Manager()
+        catalog = manager.dict()
+        for name in self.names:
+            catalog[name] = self.data[name]
+        procs = []
+        for id in tqdm(range(len(self.data_sets))):
+            p = Process(target=self.process_data_multi, args=(id, catalog))
+            p.start()
+            procs.append(p)
+        for p in procs:
+            p.join()
+        self.data = catalog
+        #with Pool(processes=4) as pool:
+        #     pool.map(self.process_data, range(self.ndata))
+            #pool.apply_async(self.process_data, range(self.ndata))
+            #multiple_results = [pool.apply_async(self.process_data, (i)) for i in range(self.ndata)]
+        #for id in tqdm(range(len(self.data_sets))):
+        #    self.process_data(id)
+        print(self.data["sc_charge_total"])
+            
     def solarcell_characterization(self):
         for id, d in enumerate(tqdm(self.data_sets)):
             for name in self.names:
