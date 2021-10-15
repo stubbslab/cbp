@@ -659,26 +659,43 @@ class SolarCellDataSet:
         self.pd.plot_data_set(ax[0])
         self.sc.plot_data_set(ax[1])
 
-    def get_time_breaks(self):
+    def get_time_breaks(self, verbose=False):
         """
         in seconds
         """
         charge_deriv2 = np.gradient(np.gradient(savgol_filter(self.sc.data["charge"], 41, polyorder=1)))
+        charge_deriv2 = savgol_filter(self.sc.data["charge"], 21, polyorder=2, deriv=2)
         cur, indeces = findTransitions(charge_deriv2, n_target_transitions=self.nbursts, pos_or_neg=1, min_data_sep=20)
-        cur2, indeces2 = findTransitions(charge_deriv2, n_target_transitions=5, pos_or_neg=-1, min_data_sep=20)
+        cur2, indeces2 = findTransitions(charge_deriv2, n_target_transitions=self.nbursts, pos_or_neg=-1, min_data_sep=20)
         bad_fit=False
         if cur != -1 and cur2 != -1:
             indeces = [ind[0] for ind in indeces]
             indeces2 = [ind[0] for ind in indeces2]
             transitions = np.union1d(indeces, indeces2)
             output = self.sc.data["time"][transitions]
-            g = output[:-1]-output[1:]
+            # check for irregularities in the durations
+            t = np.array(list(output))
+            g = t[1:]-t[:-1]
             durations = [g[i] + g[i+1] for i in range(0,g.size-1,2)] + [g[i] + g[i+1] for i in range(1,g.size-1,2)]
-            if np.std(durations) > 0.1:
+            # compute the mean absolute current
+            curr = np.gradient(self.sc.data["charge"],self.sc.data["time"])
+            curr_drift = (self.sc.data["charge"][-1]-self.sc.data["charge"][0])/(self.sc.data["time"][-1]-self.sc.data["time"][0])
+            curr_diff = np.mean(curr[curr>curr_drift])-np.mean(curr[curr<curr_drift])
+            curr_contrast = abs(curr_diff/curr_drift)
+            # if durations are irregular and current is below 1nA (low SNR) then it is probably a bad fit
+            if verbose:
+                print("findTransitions time breaks:", output)
+                print("Burst durations and std:", durations, np.std(durations))
+                print("Mean current:", curr_drift,"A")
+                print("Max-Min current:", curr_diff,"A")
+                print("Current contrast:", curr_contrast)
+            if np.std(durations) > 0.2 and curr_contrast < 3: # and np.mean(np.abs(curr))<1e-9: # 
                 bad_fit=True
         else:
             bad_fit=True
         if bad_fit:
+            if verbose:
+                print("Detected bad fit for time transistions: compute time breaks with nbursts, sleep and npulses")
             durations = [self.sleep]
             for b in range(self.nbursts):
                 durations.append(self.npulses * self.pulse_interval)
